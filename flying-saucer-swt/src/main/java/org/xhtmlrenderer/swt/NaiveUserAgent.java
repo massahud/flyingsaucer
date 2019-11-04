@@ -21,6 +21,8 @@ package org.xhtmlrenderer.swt;
 
 import java.io.*;
 import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -194,31 +196,50 @@ public class NaiveUserAgent implements UserAgentCallback {
 
     public String resolveURI(String uri) {
         if (uri == null) return null;
-        String ret = null;
-        if (_baseURL == null) {// first try to set a base URL
+
+        if (_baseURL == null) {//first try to set a base URL
             try {
-                URL result = new URL(uri);
-                setBaseURL(result.toExternalForm());
-            } catch (MalformedURLException e) {
+                URI result = new URI(uri);
+                if (result.isAbsolute()) setBaseURL(result.toString());
+            } catch (URISyntaxException e) {
+                XRLog.exception("The default NaiveUserAgent could not use the URL as base url: " + uri, e);
+            }
+            if (_baseURL == null) { // still not set -> fallback to current working directory
                 try {
                     setBaseURL(new File(".").toURI().toURL().toExternalForm());
                 } catch (Exception e1) {
-                    XRLog
-                            .exception("The default NaiveUserAgent doesn't know how to resolve the base URL for "
-                            + uri);
+                    XRLog.exception("The default NaiveUserAgent doesn't know how to resolve the base URL for " + uri);
                     return null;
                 }
             }
         }
+
+        // _baseURL is guaranteed to be non-null at this point.
+        // test if the URI is valid; if not, try to assign the base url as its parent
+        Throwable t;
         try {
-            URL result = new URL(new URL(_baseURL), uri);
-            ret = result.toString();
-        } catch (MalformedURLException e1) {
-            XRLog
-                    .exception("The default NaiveUserAgent cannot resolve the URL "
-                    + uri + " with base URL " + _baseURL);
+            URI result = new URI(uri);
+            if (result.isAbsolute()) {
+                return result.toString();
+            }
+            XRLog.load(uri + " is not a URL; may be relative. Testing using parent URL " + _baseURL);
+            URI baseURI = new URI(_baseURL);
+            if(!baseURI.isOpaque()) {
+                // uri.resolve(child) only works for opaque URIs.
+                // Otherwise it would simply return child.
+                return baseURI.resolve(result).toString();
+            }
+            // Fall back to previous resolution using URL
+            try {
+                return new URL(new URL(_baseURL), uri).toExternalForm();
+            } catch (MalformedURLException ex) {
+                t = ex;
+            }
+        } catch (URISyntaxException e) {
+            t = e;
         }
-        return ret;
+        XRLog.exception("The default NaiveUserAgent cannot resolve the URL " + uri + " with base URL " + _baseURL, t);
+        return null;
     }
 
     public String getBaseURL() {
@@ -238,6 +259,7 @@ public class NaiveUserAgent implements UserAgentCallback {
 
     public byte[] getBinaryResource(String uri) {
         InputStream is = getInputStream(uri);
+        if (is==null) return null;
         try {
             ByteArrayOutputStream result = new ByteArrayOutputStream();
             byte[] buf = new byte[10240];

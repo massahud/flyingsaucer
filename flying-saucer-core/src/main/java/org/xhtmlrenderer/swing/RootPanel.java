@@ -9,7 +9,7 @@
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public License
@@ -27,19 +27,18 @@ import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Insets;
 import java.awt.Rectangle;
-import java.awt.event.ComponentEvent;
-import java.awt.event.ComponentListener;
 import java.awt.event.MouseEvent;
-import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
-import java.util.Map;
+import java.util.Set;
 import java.util.logging.Level;
-
 import javax.swing.CellRendererPane;
 import javax.swing.JPanel;
+import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JViewport;
-
+import javax.swing.Scrollable;
+import javax.swing.SwingConstants;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.css.CSSPrimitiveValue;
@@ -65,19 +64,39 @@ import org.xhtmlrenderer.render.PageBox;
 import org.xhtmlrenderer.render.RenderingContext;
 import org.xhtmlrenderer.render.ViewportBox;
 import org.xhtmlrenderer.util.Configuration;
-import org.xhtmlrenderer.util.Uu;
 import org.xhtmlrenderer.util.XRLog;
 
 
-public class RootPanel extends JPanel implements ComponentListener, UserInterface, FSCanvas, RepaintListener {
+public class RootPanel extends JPanel implements Scrollable, UserInterface, FSCanvas, RepaintListener {
     static final long serialVersionUID = 1L;
 
     private Box rootBox = null;
     private boolean needRelayout = false;
     private CellRendererPane cellRendererPane;
-    protected Map documentListeners;
-
+    private final Set<DocumentListener> documentListeners = new HashSet<DocumentListener>();
     private boolean defaultFontFromComponent;
+    protected SharedContext sharedContext;
+    private volatile LayoutContext layoutContext;
+    private JScrollPane enclosingScrollPane;
+    private boolean viewportMatchWidth = true;
+
+    // initialize to JViewport default mode
+    private int default_scroll_mode = JViewport.BLIT_SCROLL_MODE;
+
+    protected Document doc = null;
+
+    /*
+     * ========= UserInterface implementation ===============
+     */
+    public Element hovered_element = null;
+    public Element active_element = null;
+    public Element focus_element = null;
+
+    // On-demand repaint requests for async image loading
+    private long lastRepaintRunAt = System.currentTimeMillis();
+    private final long maxRepaintRequestWaitMs = 50;
+    private boolean repaintRequestPending = false;
+    private long pendingRepaintCount = 0;
 
     public RootPanel() {
     }
@@ -90,13 +109,9 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
         return layoutContext;
     }
 
-    protected SharedContext sharedContext;
-
-    private volatile LayoutContext layoutContext;
-
     public void setDocument(Document doc, String url, NamespaceHandler nsh) {
-		fireDocumentStarted();
-		resetScrollPosition();
+        fireDocumentStarted();
+        resetScrollPosition();
         setRootBox(null);
         this.doc = doc;
 
@@ -137,10 +152,12 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
         }
     }
 
-    protected JScrollPane enclosingScrollPane;
     public void resetScrollPosition() {
-        if (this.enclosingScrollPane != null) {
-            this.enclosingScrollPane.getVerticalScrollBar().setValue(0);
+        if (enclosingScrollPane != null) {
+            JScrollBar scrollBar = enclosingScrollPane.getVerticalScrollBar();
+            if(scrollBar != null) {
+                scrollBar.setValue(0);
+            }
         }
     }
 
@@ -153,21 +170,21 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
      *                   the panel is no longer enclosed in a {@link JScrollPane}.
      */
     protected void setEnclosingScrollPane(JScrollPane scrollPane) {
-        // if a scrollpane is already installed we remove it.
-        if (enclosingScrollPane != null) {
-            enclosingScrollPane.removeComponentListener(this);
-        }
 
         enclosingScrollPane = scrollPane;
 
         if (enclosingScrollPane != null) {
-            Uu.p("added root panel as a component listener to the scroll pane");
-            enclosingScrollPane.addComponentListener(this);
-            default_scroll_mode = enclosingScrollPane.getViewport().getScrollMode();
+//            Uu.p("added root panel as a component listener to the scroll pane");
+            JViewport viewPort = enclosingScrollPane.getViewport();
+            if(viewPort != null) {
+                default_scroll_mode = viewPort.getScrollMode();
+            }
         }
     }
 
-    private int default_scroll_mode = -1;
+    protected JScrollPane getEnclosingScrollPane() {
+        return enclosingScrollPane;
+    }
 
     /**
      * Gets the fixedRectangle attribute of the BasicPanel object
@@ -177,10 +194,9 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
     public Rectangle getFixedRectangle() {
         if (enclosingScrollPane != null) {
             return enclosingScrollPane.getViewportBorderBounds();
-        } else {
-            Dimension dim = getSize();
-            return new Rectangle(0, 0, dim.width, dim.height);
         }
+        Dimension dim = getSize();
+        return new Rectangle(0, 0, dim.width, dim.height);
     }
 
     /**
@@ -208,17 +224,10 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
         setEnclosingScrollPane(null);
     }
 
-    protected Document doc = null;
-
     protected void init() {
-
-
-        documentListeners = new HashMap();
         setBackground(Color.white);
         super.setLayout(null);
     }
-
-    boolean layoutInProgress = false;
 
     public RenderingContext newRenderingContext(Graphics2D g) {
         XRLog.layout(Level.FINEST, "new context begin");
@@ -318,7 +327,8 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
 
             initFontFromComponent(root);
 
-            root.setContainingBlock(new ViewportBox(getInitialExtents(c)));
+            Rectangle initialExtents = getInitialExtents(c);
+            root.setContainingBlock(new ViewportBox(initialExtents));
 
             root.layout(c);
 
@@ -330,9 +340,9 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
             System.out.println(root.dump(c, "", BlockBox.DUMP_LAYOUT));
             */
 
-    // if there is a fixed child then we need to set opaque to false
-    // so that the entire viewport will be repainted. this is slower
-    // but that's the hit you get from using fixed layout
+            // if there is a fixed child then we need to set opaque to false
+            // so that the entire viewport will be repainted. this is slower
+            // but that's the hit you get from using fixed layout
             if (root.getLayer().containsFixedContent()) {
                 super.setOpaque(false);
             } else {
@@ -348,34 +358,29 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
                 root.getLayer().layoutPages(c);
             }
 
+            // If the initial size we fed into the layout matches the width
+            // of the layout generated then we can set the scrollable property
+            // that matches width of the view pane to the width of this panel.
+            // Otherwise, if the intrinsic width is different then we can't
+            // couple the width of the view pane to the width of this panel
+            // (we hit the minimum size threshold).
+            viewportMatchWidth = (initialExtents.width == intrinsic_size.width);
+
             setPreferredSize(intrinsic_size);
             revalidate();
 
-            // if doc is shorter than viewport
-            // then stretch canvas to fill viewport exactly
-            // then adjust the body element accordingly
             if (enclosingScrollPane != null) {
-                if (intrinsic_size.height < enclosingScrollPane.getViewport().getHeight()) {
-                    //Uu.p("int height is less than viewport height");
-                    // XXX Not threadsafe
-                    if (enclosingScrollPane.getViewport().getHeight() != this.getHeight()) {
-                        this.setPreferredSize(new Dimension(
-                                intrinsic_size.width, enclosingScrollPane.getViewport().getHeight()));
-                        this.revalidate();
+                JViewport viewPort = enclosingScrollPane.getViewport();
+                if(viewPort != null) {
+                    // turn on simple scrolling mode if there's any fixed elements
+                    if (root.getLayer().containsFixedContent()) {
+                        // Uu.p("is fixed");
+                        viewPort.setScrollMode(JViewport.SIMPLE_SCROLL_MODE);
                     }
-                    //Uu.p("need to do the body hack");
-                    if (root != null && ! c.isPrint()) {
-                        intrinsic_size.height = root.getHeight();
+                    else {
+                        // Uu.p("is not fixed");
+                        viewPort.setScrollMode(default_scroll_mode);
                     }
-                }
-
-                // turn on simple scrolling mode if there's any fixed elements
-                if (root.getLayer().containsFixedContent()) {
-                    // Uu.p("is fixed");
-                    enclosingScrollPane.getViewport().setScrollMode(JViewport.SIMPLE_SCROLL_MODE);
-                } else {
-                    // Uu.p("is not fixed");
-                    enclosingScrollPane.getViewport().setScrollMode(default_scroll_mode);
                 }
             }
 
@@ -392,7 +397,7 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
         } catch (ThreadDeath t) {
             throw t;
         } catch (Throwable t) {
-            if (documentListeners.size() > 0) {
+            if (hasDocumentListeners()) {
                 fireOnLayoutException(t);
             } else {
                 if (t instanceof Error) {
@@ -432,22 +437,50 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
         }
     }
 
-	protected void fireDocumentStarted() {
-		Iterator it = this.documentListeners.keySet().iterator();
-		while (it.hasNext()) {
-			DocumentListener list = (DocumentListener) it.next();
+    /**
+     * Adds the specified Document listener to receive Document events from this
+     * component. If listener l is null, no exception is thrown and no action is
+     * performed.
+     *
+     * @param listener Contains the DocumentListener for DocumentEvent data.
+     */
+    public void addDocumentListener(DocumentListener listener) {
+        if(listener == null) {
+            return;
+        }
+        documentListeners.add(listener);
+    }
+
+    /**
+     * Removes the specified Document listener from receive Document events from this
+     * component. If listener l is null, no exception is thrown and no action is
+     * performed.
+     *
+     * @param listener Contains the DocumentListener to remove.
+     */
+    public void removeDocumentListener(DocumentListener listener) {
+        if(listener == null) {
+            return;
+        }
+        documentListeners.remove(listener);
+    }
+
+    protected boolean hasDocumentListeners() {
+        return !documentListeners.isEmpty();
+    }
+
+    protected void fireDocumentStarted() {
+        for (DocumentListener list : documentListeners) {
             try {
                 list.documentStarted();
             } catch (Exception e) {
                 XRLog.load(Level.WARNING, "Document listener threw an exception; continuing processing", e);
             }
         }
-	}
+    }
 
     protected void fireDocumentLoaded() {
-        Iterator it = this.documentListeners.keySet().iterator();
-        while (it.hasNext()) {
-            DocumentListener list = (DocumentListener) it.next();
+        for (DocumentListener list : documentListeners) {
             try {
                 list.documentLoaded();
             } catch (Exception e) {
@@ -457,9 +490,7 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
     }
 
     protected void fireOnLayoutException(Throwable t) {
-        Iterator it = this.documentListeners.keySet().iterator();
-        while (it.hasNext()) {
-            DocumentListener list = (DocumentListener) it.next();
+        for (DocumentListener list : documentListeners) {
             try {
                 list.onLayoutException(t);
             } catch (Exception e) {
@@ -469,9 +500,7 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
     }
 
     protected void fireOnRenderException(Throwable t) {
-        Iterator it = this.documentListeners.keySet().iterator();
-        while (it.hasNext()) {
-            DocumentListener list = (DocumentListener) it.next();
+        for (DocumentListener list : documentListeners) {
             try {
                 list.onRenderException(t);
             } catch (Exception e) {
@@ -493,48 +522,16 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
     }
 
 
-    /*
-    * ========= UserInterface implementation ===============
-    */
-    public Element hovered_element = null;
-
-    public Element active_element = null;
-
-    public Element focus_element = null;
-
     public boolean isHover(org.w3c.dom.Element e) {
-        if (e == hovered_element) {
-            return true;
-        }
-        return false;
+        return e == hovered_element;
     }
 
     public boolean isActive(org.w3c.dom.Element e) {
-        if (e == active_element) {
-            return true;
-        }
-        return false;
+        return e == active_element;
     }
 
     public boolean isFocus(org.w3c.dom.Element e) {
-        if (e == focus_element) {
-            return true;
-        }
-        return false;
-    }
-
-    public void componentHidden(ComponentEvent e) {
-    }
-
-    public void componentMoved(ComponentEvent e) {
-    }
-
-    public void componentResized(ComponentEvent e) {
-        Uu.p("componentResized() " + this.getSize());
-        Uu.p("viewport = " + enclosingScrollPane.getViewport().getSize());
-        if (! getSharedContext().isPrint() && isExtentsHaveChanged()) {
-            relayout();
-        }
+        return e == focus_element;
     }
 
     protected void relayout() {
@@ -542,9 +539,6 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
             setNeedRelayout(true);
             repaint();
         }
-    }
-
-    public void componentShown(ComponentEvent e) {
     }
 
     public double getLayoutWidth() {
@@ -583,6 +577,13 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
         return null;
     }
 
+    public void doLayout() {
+        if (isExtentsHaveChanged()) {
+            setNeedRelayout(true);
+        }
+        super.doLayout();
+    }
+
     public void validate() {
         super.validate();
 
@@ -611,12 +612,6 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
     protected synchronized void setNeedRelayout(boolean needRelayout) {
         this.needRelayout = needRelayout;
     }
-
-    // On-demand repaint requests for async image loading
-    private long lastRepaintRunAt = System.currentTimeMillis();
-    private final long maxRepaintRequestWaitMs = 50;
-    private boolean repaintRequestPending = false;
-    private long pendingRepaintCount = 0;
 
     public void repaintRequested(final boolean doLayout) {
         final long now = System.currentTimeMillis();
@@ -665,4 +660,51 @@ public class RootPanel extends JPanel implements ComponentListener, UserInterfac
     public void setDefaultFontFromComponent(boolean defaultFontFromComponent) {
         this.defaultFontFromComponent = defaultFontFromComponent;
     }
+
+    // ----- Scrollable interface -----
+
+    public Dimension getPreferredScrollableViewportSize() {
+      return getPreferredSize();
+    }
+
+    public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) {
+      int dif = 1;
+      if (orientation == SwingConstants.VERTICAL) {
+        dif = visibleRect.height;
+      }
+      else if (orientation == SwingConstants.HORIZONTAL) {
+        dif = visibleRect.width;
+      }
+      return Math.min(35, dif);
+    }
+
+    public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) {
+      int dif = 1;
+      if (orientation == SwingConstants.VERTICAL) {
+        dif = Math.max(visibleRect.height - 10, dif);
+      }
+      else if (orientation == SwingConstants.HORIZONTAL) {
+        dif = Math.max(visibleRect.width, dif);
+      }
+      return dif;
+    }
+
+    public boolean getScrollableTracksViewportWidth() {
+        // If the last layout successfully filled the desired width then
+        // viewport should match the component size.
+        return viewportMatchWidth;
+    }
+
+    public boolean getScrollableTracksViewportHeight() {
+        // If the last layout height of this component is <= the viewport
+        // height then we make the viewport height match the component size.
+        if(enclosingScrollPane != null) {
+            JViewport viewPort = enclosingScrollPane.getViewport();
+            if (viewPort != null) {
+                return getPreferredSize().height <= viewPort.getHeight();
+            }
+        }
+        return false;
+    }
+
 }

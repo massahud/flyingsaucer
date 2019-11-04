@@ -67,8 +67,8 @@ import com.lowagie.text.pdf.PdfWriter;
 public class ITextRenderer {
     // These two defaults combine to produce an effective resolution of 96 px to
     // the inch
-    private static final float DEFAULT_DOTS_PER_POINT = 20f * 4f / 3f;
-    private static final int DEFAULT_DOTS_PER_PIXEL = 20;
+    public static final float DEFAULT_DOTS_PER_POINT = 20f * 4f / 3f;
+    public static final int DEFAULT_DOTS_PER_PIXEL = 20;
 
     private final SharedContext _sharedContext;
     private final ITextOutputDevice _outputDevice;
@@ -92,18 +92,29 @@ public class ITextRenderer {
     private final char[] validPdfVersions = new char[] { PdfWriter.VERSION_1_2, PdfWriter.VERSION_1_3, PdfWriter.VERSION_1_4,
             PdfWriter.VERSION_1_5, PdfWriter.VERSION_1_6, PdfWriter.VERSION_1_7 };
 
-    private PDFCreationListener _listener;
+    private Integer _pdfXConformance;
+
+	private PDFCreationListener _listener;
+
+    private boolean _timeouted;
 
     public ITextRenderer() {
         this(DEFAULT_DOTS_PER_POINT, DEFAULT_DOTS_PER_PIXEL);
     }
 
     public ITextRenderer(float dotsPerPoint, int dotsPerPixel) {
+        this(dotsPerPoint, dotsPerPixel, new ITextOutputDevice(dotsPerPoint));
+    }
+
+    public ITextRenderer(float dotsPerPoint, int dotsPerPixel, ITextOutputDevice outputDevice) {
+        this(dotsPerPoint, dotsPerPixel, outputDevice, new ITextUserAgent(outputDevice));
+    }
+
+    public ITextRenderer(float dotsPerPoint, int dotsPerPixel, ITextOutputDevice outputDevice, ITextUserAgent userAgent) {
         _dotsPerPoint = dotsPerPoint;
 
-        _outputDevice = new ITextOutputDevice(_dotsPerPoint);
+        _outputDevice = outputDevice;
 
-        ITextUserAgent userAgent = new ITextUserAgent(_outputDevice);
         _sharedContext = new SharedContext();
         _sharedContext.setUserAgentCallback(userAgent);
         _sharedContext.setCss(new StyleReference(userAgent));
@@ -121,6 +132,8 @@ public class ITextRenderer {
         _sharedContext.setDotsPerPixel(dotsPerPixel);
         _sharedContext.setPrint(true);
         _sharedContext.setInteractive(false);
+
+        _timeouted= false;
     }
 
     public Document getDocument() {
@@ -199,6 +212,15 @@ public class ITextRenderer {
     public char getPDFVersion() {
         return _pdfVersion == null ? '0' : _pdfVersion.charValue();
     }
+	
+	public void setPDFXConformance(int pdfXConformance){
+		_pdfXConformance = new Integer(pdfXConformance);
+	}
+	
+	public int getPDFXConformance(){
+        return _pdfXConformance == null ? '0' : _pdfXConformance.intValue();
+	}
+
 
     public void layout() {
         LayoutContext c = newLayoutContext();
@@ -293,6 +315,11 @@ public class ITextRenderer {
         if (_pdfVersion != null) {
             writer.setPdfVersion(_pdfVersion.charValue());
         }
+		
+		if (_pdfXConformance != null) {
+			writer.setPDFXConformance(_pdfXConformance.intValue());
+		}
+
         if (_pdfEncryption != null) {
             writer.setEncryption(_pdfEncryption.getUserPassword(), _pdfEncryption.getOwnerPassword(),
                     _pdfEncryption.getAllowedPrivileges(), _pdfEncryption.getEncryptionType());
@@ -344,6 +371,10 @@ public class ITextRenderer {
         firePreWrite(pageCount); // opportunity to adjust meta data
         setDidValues(doc); // set PDF header fields from meta data
         for (int i = 0; i < pageCount; i++) {
+
+            if (isTimeouted() || Thread.currentThread().isInterrupted())
+                throw new RuntimeException("Timeout occured");
+
             PageBox currentPage = (PageBox) pages.get(i);
             c.setPage(i, currentPage);
             paintPage(c, writer, currentPage);
@@ -516,5 +547,13 @@ public class ITextRenderer {
 
     public PdfWriter getWriter() {
         return _writer;
+    }
+
+    public void setTimeouted(boolean timeouted) {
+        _timeouted= timeouted;
+    }
+
+    public boolean isTimeouted() {
+        return _timeouted;
     }
 }

@@ -21,6 +21,7 @@ package org.xhtmlrenderer.render;
 
 import java.awt.Rectangle;
 import java.awt.Shape;
+import java.awt.geom.Area;
 import java.util.Iterator;
 import java.util.List;
 
@@ -175,7 +176,6 @@ public abstract class AbstractOutputDevice implements OutputDevice {
             try {
                 return c.getUac().getImageResource(uri).getImage();
             } catch (Exception ex) {
-                ex.printStackTrace();
                 Uu.p(ex);
             }
         }
@@ -219,13 +219,23 @@ public abstract class AbstractOutputDevice implements OutputDevice {
                 backgroundImage == null) {
             return;
         }
+        
+        Area borderBounds = new Area(BorderPainter.generateBorderBounds(backgroundBounds, border, false));
 
+        Shape oldclip = getClip();
+        if(oldclip != null) {
+            // we need to respect the clip sent to us, get the intersection between the old and the new
+        	borderBounds.intersect(new Area(oldclip));
+        }
+        
         if (backgroundColor != null && backgroundColor != FSRGBColor.TRANSPARENT) {
             setColor(backgroundColor);
-            fillRect(backgroundBounds.x, backgroundBounds.y, backgroundBounds.width, backgroundBounds.height);
+            fill(borderBounds);
         }
 
         if (backgroundImage != null) {
+            setClip(borderBounds);
+
             Rectangle localBGImageContainer = bgImageContainer;
             if (style.isFixedBackground()) {
                 localBGImageContainer = c.getViewportRectangle();
@@ -238,10 +248,6 @@ public abstract class AbstractOutputDevice implements OutputDevice {
                 xoff += (int)border.left();
                 yoff += (int)border.top();
             }
-
-            Shape oldclip = getClip();
-
-            clip(backgroundBounds);
 
             scaleBackgroundImage(c, style, localBGImageContainer, backgroundImage);
 

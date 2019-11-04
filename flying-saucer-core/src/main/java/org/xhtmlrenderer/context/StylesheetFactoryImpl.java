@@ -34,7 +34,9 @@ import org.xhtmlrenderer.css.sheet.Stylesheet;
 import org.xhtmlrenderer.css.sheet.StylesheetInfo;
 import org.xhtmlrenderer.extend.UserAgentCallback;
 import org.xhtmlrenderer.resource.CSSResource;
+import org.xhtmlrenderer.util.Configuration;
 import org.xhtmlrenderer.util.XRLog;
+import org.xml.sax.InputSource;
 
 /**
  * A Factory class for Cascading Style Sheets. Sheets are parsed using a single
@@ -78,7 +80,6 @@ public class StylesheetFactoryImpl implements StylesheetFactory {
             return _cssParser.parseStylesheet(info.getUri(), info.getOrigin(), reader);
         } catch (IOException e) {
             XRLog.cssParse(Level.WARNING, "Couldn't parse stylesheet at URI " + info.getUri() + ": " + e.getMessage(), e);
-            e.printStackTrace();
             return new Stylesheet(info.getUri(), info.getOrigin());
         }
     }
@@ -88,11 +89,15 @@ public class StylesheetFactoryImpl implements StylesheetFactory {
      */
     private Stylesheet parse(StylesheetInfo info) {
         CSSResource cr = _userAgentCallback.getCSSResource(info.getUri());
+        if (cr==null) return null;  
         // Whether by accident or design, InputStream will never be null
         // since the null resource stream is wrapped in a BufferedInputStream
-        InputStream is = cr.getResourceInputSource().getByteStream();
+        InputSource inputSource=cr.getResourceInputSource();
+        if (inputSource==null) return null;
+        InputStream is = inputSource.getByteStream();
+        if (is==null) return null;
         try {
-            return parse(new InputStreamReader(is, "UTF-8"), info);
+            return parse(new InputStreamReader(is, Configuration.valueFor("xr.stylesheets.charset-name", "UTF-8")), info);
         } catch (UnsupportedEncodingException e) {
             // Shouldn't happen
             throw new RuntimeException(e.getMessage(), e);

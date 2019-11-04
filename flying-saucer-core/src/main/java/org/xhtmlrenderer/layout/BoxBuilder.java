@@ -32,6 +32,7 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.Text;
+import org.w3c.dom.EntityReference;
 import org.w3c.dom.css.CSSPrimitiveValue;
 import org.xhtmlrenderer.css.constants.CSSName;
 import org.xhtmlrenderer.css.constants.IdentValue;
@@ -107,7 +108,8 @@ public class BoxBuilder {
     }
 
     public static void createChildren(LayoutContext c, BlockBox parent) {
-        List children = new ArrayList();
+
+		List children = new ArrayList();
 
         ChildBoxInfo info = new ChildBoxInfo();
 
@@ -847,10 +849,10 @@ public class BoxBuilder {
                 }
             } else if (type == CSSPrimitiveValue.CSS_IDENT) {
                 FSDerivedValue dv = style.valueByName(CSSName.QUOTES);
-                
+
                 if (dv != IdentValue.NONE) {
                     IdentValue ident = value.getIdentValue();
-                    
+
                     if (ident == IdentValue.OPEN_QUOTE) {
                         String[] quotes = style.asStringArray(CSSName.QUOTES);
                         content = quotes[0];
@@ -1097,7 +1099,28 @@ public class BoxBuilder {
                         continue;
                     }
 
-                    c.resolveCounters(style);
+                    Integer start = null;
+					if ("ol".equals(working.getNodeName())) {
+						Node startAttribute = working.getAttributes().getNamedItem("start");
+						if (startAttribute != null) {
+							try {
+								start = new Integer(Integer.parseInt(startAttribute.getNodeValue()) - 1);
+							} catch (NumberFormatException e) {
+								// ignore
+							}
+						}
+					} else if ("li".equals(working.getNodeName())) {
+						Node valueAttribute = working.getAttributes().getNamedItem("value");
+						if (valueAttribute != null) {
+							try {
+								start = new Integer(Integer.parseInt(valueAttribute.getNodeValue()) - 1);
+							} catch (NumberFormatException e) {
+								// ignore
+							}
+						}
+					}
+
+	                c.resolveCounters(style, start);
 
                     if (style.isIdent(CSSName.DISPLAY, IdentValue.TABLE_COLUMN)
                             || style.isIdent(CSSName.DISPLAY, IdentValue.TABLE_COLUMN_GROUP)) {
@@ -1190,6 +1213,18 @@ public class BoxBuilder {
                     */
 
                     child = createInlineBox(textNode.getData(), parent, parentStyle, textNode);
+
+                    InlineBox iB = (InlineBox) child;
+                    iB.setEndsHere(true);
+                    if (previousIB == null) {
+                        iB.setStartsHere(true);
+                    } else {
+                        previousIB.setEndsHere(false);
+                    }
+                    previousIB = iB;
+                } else if(nodeType == Node.ENTITY_REFERENCE_NODE) {
+                    EntityReference entityReference = (EntityReference)working;
+                    child = createInlineBox(entityReference.getTextContent(), parent, parentStyle, null);
 
                     InlineBox iB = (InlineBox) child;
                     iB.setEndsHere(true);

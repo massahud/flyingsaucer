@@ -117,7 +117,7 @@ public class CalculatedStyle {
      * this for class instantiation externally.
      */
     protected CalculatedStyle() {
-        _derivedValuesById = new FSDerivedValue[CSSName.countCSSPrimitiveNames()];
+        _derivedValuesById = new FSDerivedValue[CSSName.countCSSNames()];
     }
 
 
@@ -713,7 +713,7 @@ public class CalculatedStyle {
             BorderPropertySet result = BorderPropertySet.newInstance(style, ctx);
 
             boolean allZeros = result.isAllZeros();
-            if (allZeros && ! result.hasHidden()) {
+            if (allZeros && ! result.hasHidden() && !result.hasBorderRadius()) {
                 result = BorderPropertySet.EMPTY_BORDER;
             }
 
@@ -772,6 +772,10 @@ public class CalculatedStyle {
 
     public IdentValue getWordWrap() {
         return getIdent(CSSName.WORD_WRAP);
+    }
+    
+    public IdentValue getHyphens() {
+        return getIdent(CSSName.HYPHENS);
     }
 
     public boolean isClearLeft() {
@@ -1091,6 +1095,10 @@ public class CalculatedStyle {
         return isIdent(CSSName.MAX_HEIGHT, IdentValue.NONE);
     }
 
+    public boolean isBorderBox() {
+        return isIdent(CSSName.BOX_SIZING, IdentValue.BORDER_BOX);
+    }
+
     public int getMinWidth(CssContext c, int cbWidth) {
         return (int) getFloatPropertyProportionalTo(CSSName.MIN_WIDTH, cbWidth, c);
     }
@@ -1108,7 +1116,7 @@ public class CalculatedStyle {
     }
 
     public boolean isCollapseBorders() {
-        return isIdent(CSSName.BORDER_COLLAPSE, IdentValue.COLLAPSE) && ! isPaginateTable();
+        return isIdent(CSSName.BORDER_COLLAPSE, IdentValue.COLLAPSE);
     }
 
     public int getBorderHSpacing(CssContext c) {

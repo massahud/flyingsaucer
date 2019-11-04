@@ -30,11 +30,14 @@ import org.xhtmlrenderer.css.value.FontSpecification;
 import org.xhtmlrenderer.extend.FontResolver;
 import org.xhtmlrenderer.layout.SharedContext;
 import org.xhtmlrenderer.render.FSFont;
+import org.xhtmlrenderer.util.FontUtil;
+import org.xhtmlrenderer.util.SupportedEmbeddedFontTypes;
 import org.xhtmlrenderer.util.XRLog;
 import org.xhtmlrenderer.util.XRRuntimeException;
 
 import java.io.*;
 import java.util.*;
+import java.util.stream.Stream;
 
 public class ITextFontResolver implements FontResolver {
     private Map _fontFamilies = createInitialFontMap();
@@ -134,15 +137,25 @@ public class ITextFontResolver implements FontResolver {
             }
 
             boolean embedded = style.isIdent(CSSName.FS_PDF_FONT_EMBED, IdentValue.EMBED);
-
             String encoding = style.getStringProperty(CSSName.FS_PDF_FONT_ENCODING);
-
             String fontFamily = null;
+            IdentValue fontWeight = null;
+            IdentValue fontStyle = null;
+
             if (rule.hasFontFamily()) {
                 fontFamily = style.valueByName(CSSName.FONT_FAMILY).asString();
             }
+
+            if (rule.hasFontWeight()) {
+                fontWeight = style.getIdent(CSSName.FONT_WEIGHT);
+            }
+
+            if (rule.hasFontStyle()) {
+                fontStyle = style.getIdent(CSSName.FONT_STYLE);
+            }
+
             try {
-                addFontFaceFont(fontFamily, src.asString(), encoding, embedded, font1, font2);
+                addFontFaceFont(fontFamily, fontWeight, fontStyle, src.asString(), encoding, embedded, font1, font2);
             } catch (DocumentException e) {
                 XRLog.exception("Could not load font " + src.asString(), e);
                 continue;
@@ -242,12 +255,24 @@ public class ITextFontResolver implements FontResolver {
         }
     }
 
+    private boolean fontSupported(String uri) {
+        String lower = uri.toLowerCase();
+        if(FontUtil.isEmbeddedBase64Font(uri)) {
+            return SupportedEmbeddedFontTypes.isSupported(uri);
+        } else {
+            return lower.endsWith(".otf") ||
+                    lower.endsWith(".ttf") ||
+                    lower.contains(".ttc,");
+        }
+    }
+
     private void addFontFaceFont(
-            String fontFamilyNameOverride, String uri, String encoding, boolean embedded, byte[] afmttf, byte[] pfb)
+            String fontFamilyNameOverride, IdentValue fontWeightOverride, IdentValue fontStyleOverride, String uri, String encoding, boolean embedded, byte[] afmttf, byte[] pfb)
             throws DocumentException, IOException {
         String lower = uri.toLowerCase();
-        if (lower.endsWith(".otf") || lower.endsWith(".ttf") || lower.indexOf(".ttc,") != -1) {
-            BaseFont font = BaseFont.createFont(uri, encoding, embedded, false, afmttf, pfb);
+        if (fontSupported(lower)) {
+            String fontName = (FontUtil.isEmbeddedBase64Font(uri)) ? fontFamilyNameOverride+SupportedEmbeddedFontTypes.getExtension(uri) : uri;
+            BaseFont font = BaseFont.createFont(fontName, encoding, embedded, false, afmttf, pfb);
 
             String[] fontFamilyNames;
             if (fontFamilyNameOverride != null) {
@@ -267,6 +292,14 @@ public class ITextFontResolver implements FontResolver {
                 }
 
                 descr.setFromFontFace(true);
+
+                if (fontWeightOverride != null) {
+                    descr.setWeight(convertWeightToInt(fontWeightOverride));
+                }
+
+                if (fontStyleOverride != null) {
+                    descr.setStyle(fontStyleOverride);
+                }
 
                 fontFamily.addFontDescription(descr);
             }
@@ -379,6 +412,7 @@ public class ITextFontResolver implements FontResolver {
 
         String cacheKey = getHashName(normalizedFontFamily, weight, style);
         FontDescription result = (FontDescription)_fontCache.get(cacheKey);
+
         if (result != null) {
             return new ITextFSFont(result, size);
         }

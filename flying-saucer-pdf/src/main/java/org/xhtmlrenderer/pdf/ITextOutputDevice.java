@@ -35,8 +35,6 @@ import java.awt.geom.PathIterator;
 import java.awt.geom.Point2D;
 import java.io.IOException;
 import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -67,7 +65,6 @@ import org.xhtmlrenderer.layout.SharedContext;
 import org.xhtmlrenderer.pdf.ITextFontResolver.FontDescription;
 import org.xhtmlrenderer.render.AbstractOutputDevice;
 import org.xhtmlrenderer.render.BlockBox;
-import org.xhtmlrenderer.render.BorderPainter;
 import org.xhtmlrenderer.render.Box;
 import org.xhtmlrenderer.render.FSFont;
 import org.xhtmlrenderer.render.InlineLayoutBox;
@@ -291,7 +288,7 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
                             _writer.addAnnotation(annot);
                         }
                     }
-                } else if (uri.indexOf("://") != -1) {
+                } else if (uri.indexOf("://") != -1 || uri.startsWith("mailto:")) {
                     PdfAction action = new PdfAction(uri);
 
                     com.lowagie.text.Rectangle targetArea = checkLinkArea(c, box);
@@ -370,8 +367,8 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
         return result;
     }
 
-    public void drawBorderLine(Rectangle bounds, int side, int lineWidth, boolean solid) {
-        float x = bounds.x;
+    public void drawBorderLine(Shape bounds, int side, int lineWidth, boolean solid) {
+       /*( float x = bounds.x;
         float y = bounds.y;
         float w = bounds.width;
         float h = bounds.height;
@@ -399,9 +396,9 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
                 offset += 1;
             }
             line = new Line2D.Float(x + adj, y + h - offset + adj2, x + w - adj, y + h - offset + adj2);
-        }
+        }*/
 
-        draw(line);
+        draw(bounds);
     }
 
     public void setColor(FSColor color) {
@@ -416,7 +413,7 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
         }
     }
 
-    private void draw(Shape s) {
+    public void draw(Shape s) {
         followPath(s, STROKE);
     }
 
@@ -505,13 +502,15 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
         if (fontSpec != null) {
             int need = ITextFontResolver.convertWeightToInt(fontSpec.fontWeight);
             int have = desc.getWeight();
+
             if (need > have) {
                 cb.setTextRenderingMode(PdfContentByte.TEXT_RENDER_MODE_FILL_STROKE);
                 float lineWidth = fontSize * 0.04f; // 4% of font size
                 cb.setLineWidth(lineWidth);
                 resetMode = true;
+                ensureStrokeColor();
             }
-            if ((fontSpec.fontStyle == IdentValue.ITALIC) && (desc.getStyle() != IdentValue.ITALIC)) {
+            if ((fontSpec.fontStyle == IdentValue.ITALIC) && (desc.getStyle() != IdentValue.ITALIC) && (desc.getStyle() != IdentValue.OBLIQUE)) {
                 b = 0f;
                 c = 0.21256f;
             }
@@ -647,6 +646,7 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
                 break;
 
             case PathIterator.SEG_QUADTO:
+            	System.out.println("Quad to " + coords[0] + " " + coords[1] + " " + coords[2] + " " + coords[3]);
                 cb.curveTo(coords[0], coords[1], coords[2], coords[3]);
                 break;
             }
@@ -852,15 +852,13 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
     }
 
     private void drawPDFAsImage(PDFAsImage image, int x, int y) {
-        URL url = image.getURL();
+        URI uri = image.getURI();
         PdfReader reader = null;
 
         try {
-            reader = getReader(url);
+            reader = getReader(uri);
         } catch (IOException e) {
-            throw new XRRuntimeException("Could not load " + url + ": " + e.getMessage(), e);
-        } catch (URISyntaxException e) {
-            throw new XRRuntimeException("Could not load " + url + ": " + e.getMessage(), e);
+            throw new XRRuntimeException("Could not load " + uri + ": " + e.getMessage(), e);
         }
 
         PdfImportedPage page = getWriter().getImportedPage(reader, 1);
@@ -885,11 +883,10 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
         _currentPage.saveState();
     }
 
-    public PdfReader getReader(URL url) throws IOException, URISyntaxException {
-        URI uri = url.toURI();
+    public PdfReader getReader(URI uri) throws IOException {
         PdfReader result = (PdfReader) _readerCache.get(uri);
         if (result == null) {
-            result = new PdfReader(url);
+            result = new PdfReader(getSharedContext().getUserAgentCallback().getBinaryResource(uri.toString()));
             _readerCache.put(uri, result);
         }
         return result;
@@ -907,9 +904,13 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
     public void finish(RenderingContext c, Box root) {
         writeOutline(c, root);
         writeNamedDestinations(c);
+        _bookmarks.clear();
     }
 
     private void writeOutline(RenderingContext c, Box root) {
+        if (_bookmarks.isEmpty()) {
+            _bookmarks = HTMLOutline.generate(root.getElement(), root);
+        }
         if (_bookmarks.size() > 0) {
             _writer.setViewerPreferences(PdfWriter.PageModeUseOutlines);
             writeBookmarks(c, root, _writer.getRootOutline(), _bookmarks);
@@ -975,15 +976,16 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
     private void writeBookmark(RenderingContext c, Box root, PdfOutline parent, Bookmark bookmark) {
         String href = bookmark.getHRef();
         PdfDestination target = null;
+        Box box = bookmark.getBox();
         if (href.length() > 0 && href.charAt(0) == '#') {
-            Box box = _sharedContext.getBoxById(href.substring(1));
-            if (box != null) {
-                PageBox page = root.getLayer().getPage(c, getPageRefY(box));
-                int distanceFromTop = page.getMarginBorderPadding(c, CalculatedStyle.TOP);
-                distanceFromTop += box.getAbsY() - page.getTop();
-                target = new PdfDestination(PdfDestination.XYZ, 0, normalizeY(distanceFromTop / _dotsPerPoint), 0);
-                target.addPage(_writer.getPageReference(_startPageNo + page.getPageNo() + 1));
-            }
+            box = _sharedContext.getBoxById(href.substring(1));
+        }
+        if (box != null) {
+            PageBox page = root.getLayer().getPage(c, getPageRefY(box));
+            int distanceFromTop = page.getMarginBorderPadding(c, CalculatedStyle.TOP);
+            distanceFromTop += box.getAbsY() - page.getTop();
+            target = new PdfDestination(PdfDestination.XYZ, 0, normalizeY(distanceFromTop / _dotsPerPoint), 0);
+            target.addPage(_writer.getPageReference(_startPageNo + page.getPageNo() + 1));
         }
         if (target == null) {
             target = _defaultDestination;
@@ -1024,9 +1026,10 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
         }
     }
 
-    private static class Bookmark {
+    static class Bookmark {
         private String _name;
         private String _HRef;
+        private Box    _box;
 
         private List _children;
 
@@ -1036,6 +1039,14 @@ public class ITextOutputDevice extends AbstractOutputDevice implements OutputDev
         public Bookmark(String name, String href) {
             _name = name;
             _HRef = href;
+        }
+
+        public Box getBox() {
+            return _box;
+        }
+
+        public void setBox(Box box) {
+            _box = box;
         }
 
         public String getHRef() {

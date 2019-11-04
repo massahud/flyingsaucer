@@ -19,12 +19,15 @@
  */
 package org.xhtmlrenderer.pdf;
 
+import java.net.URI;
 import java.net.URL;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.xhtmlrenderer.extend.FSImage;
 
 public class PDFAsImage implements FSImage {
-    private URL _source;
+    private URI _source;
     
     private float _width;
     private float _height;
@@ -32,7 +35,7 @@ public class PDFAsImage implements FSImage {
     private float _unscaledWidth;
     private float _unscaledHeight;
     
-    public PDFAsImage(URL source) {
+    public PDFAsImage(URI source) {
         _source = source;
     }
     
@@ -60,7 +63,7 @@ public class PDFAsImage implements FSImage {
         _height = targetHeight;
     }
     
-    public URL getURL() {
+    public URI getURI() {
         return _source;
     }
     
@@ -108,6 +111,18 @@ public class PDFAsImage implements FSImage {
     
     public float scaleWidth() {
         return _width / _unscaledWidth;
+    }
+
+    private static Pattern pageUriPattern = Pattern.compile("page=(\\d+)");
+
+    public static int pageNumberFromURI(URI uri) {
+        String fragment = uri.getFragment();
+        int pageNumber = 1;
+        Matcher pageMatcher = pageUriPattern.matcher(fragment);
+        if(!fragment.isEmpty() && pageMatcher.find()) {
+            pageNumber = Integer.parseInt(pageMatcher.group(1));
+        }
+        return pageNumber;
     }
 
 }
